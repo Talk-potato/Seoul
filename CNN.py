@@ -1,85 +1,72 @@
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
-import numpy as np
+import matplotlib.pyplot as plt
 import pandas as pd
+from numpy import array
+from keras.models import Sequential
+from keras.layers import Dense, Flatten, Conv1D, MaxPooling1D
 
 # 데이터 불러오기
 df = pd.read_csv('202309.csv', sep=',')
+# print(df.head())[:10]
+#    1500000100  1500000200  1500000506  ...  1550383400  1550383500  1550383600
+# 0        53.0        26.0        18.0  ...        21.0        18.0        26.0
+# 1        31.0        28.0        19.0  ...        21.0        18.0        26.0
+# 2        21.0        31.0        28.0  ...        21.0        18.0        26.0
+# 3        24.0        38.0        21.0  ...        21.0        18.0        26.0
+# 4        26.0        40.0        36.0  ...        21.0        18.0        26.0
 timeseries = df.iloc[:, 0].values.astype('float32')[:500]
-#600 -> 16%, 500->8%
-# 시계열 데이터를 위한 윈도우 생성 함수
-def create_sequences(data, lookback):
-    X, y = [], []
-    for i in range(len(data) - lookback):
-        X.append(data[i:i + lookback])
-        y.append(data[i + lookback])
-    return torch.tensor(X), torch.tensor(y)
 
-# 데이터 전처리
-lookback = 10
-X, y = create_sequences(timeseries, lookback)
-X = X.unsqueeze(1)  # 3D 데이터로 변환 (배치 크기, 피처 수, 시퀀스 길이)
-y = y.unsqueeze(1)  # 2D 데이터로 변환 (배치 크기, 피처 수)
 
-# 데이터를 학습 세트와 테스트 세트로 나누기
-train_size = int(0.8 * len(X))
-X_train, y_train = X[:train_size], y[:train_size]
-X_test, y_test = X[train_size:], y[train_size:]
+# split a uni-variate sequence into samples
+def split_sequence(sequence, n_steps):
+    X, y = list(), list()
+    for i in range(len(sequence)):
+        end_ix = i + n_steps
+        if end_ix > len(sequence) - 1:
+            break
+        seq_x, seq_y = sequence[i:end_ix], sequence[end_ix]
+        X.append(seq_x)
+        y.append(seq_y)
+    return array(X), array(y)
 
-# 1D CNN 모델 정의
-class TrafficCNN(nn.Module):
-    def __init__(self):
-        super(TrafficCNN, self).__init__()
-        self.conv1d = nn.Conv1d(1, 16, kernel_size=3)
-        self.relu = nn.ReLU()
-        self.fc = nn.Linear(16 * (lookback - 2), 1)
 
-    def forward(self, x):
-        x = self.conv1d(x)
-        x = self.relu(x)
-        x = x.view(x.size(0), -1)  # Flatten the output
-        x = self.fc(x)
-        return x
+# define input sequence
+row_seq = timeseries
+n_steps = 3
+X, y = split_sequence(row_seq, n_steps)
 
-# 모델 초기화
-model = TrafficCNN()
+# for i in range(len(X)):
+#     print(X[i], y[i])
 
-# 모델 설정
-criterion = nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+# define model
+n_features = 1
+model = Sequential()
+model.add(Conv1D(filters=64, kernel_size=2, activation='relu', input_shape=(n_steps, n_features)))
+model.add(MaxPooling1D(pool_size=2))
+model.add(Flatten())
+model.add(Dense(50, activation='relu'))
+model.add(Dense(1))
+model.compile(optimizer='adam', loss='mse')
 
-# 데이터로더 설정
-train_dataset = TensorDataset(X_train, y_train)
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+# fit model
+model.fit(X, y, epochs=100, verbose=0)
 
-# 모델 학습
-num_epochs = 150
-for epoch in range(num_epochs):
-    model.train()
-    for inputs, labels in train_loader:
-        optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-    print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item()}')
+# demonstrate prediction and plot
+x_input = X[-1]
+x_input = x_input.reshape((1, n_steps, n_features))
+yhat = model.predict(x_input, verbose=0)
+print("Predictive Value : ", yhat)
 
-# 모델 평가
-model.eval()
-with torch.no_grad():
-    test_inputs = X_test
-    predicted = model(test_inputs)
-    test_loss = criterion(predicted, y_test)
-    print(f'Test Loss: {test_loss.item()}')
+# 모든 데이터 포인트를 포함하여 전체 시계열 데이터를 예측한다.
+predicted_values = []
+for i in range(len(X)):
+    x_input = X[i].reshape((1, n_steps, n_features))
+    yhat = model.predict(x_input, verbose=0)
+    predicted_values.append(yhat[0][0])
 
-# 예측 결과 및 실제 결과 그래프로 나타내기
-import matplotlib.pyplot as plt
-plt.figure(figsize=(12, 6))
-plt.plot(y_test, label='True')
-plt.plot(predicted, label='Predicted', linestyle='--')
-plt.title('Traffic Speed Prediction')
-plt.xlabel('Time Step')
-plt.ylabel('Speed')
+# 실제 값과 예측 값 그래프로 그리기
+plt.plot(y, label='Real value')
+plt.plot(predicted_values, label='Predictive value', linestyle='dashed')
+plt.xlabel('Time')
+plt.ylabel('Value')
 plt.legend()
 plt.show()
